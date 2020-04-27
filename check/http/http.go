@@ -1,6 +1,7 @@
 package http
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -72,6 +73,10 @@ type Checker struct {
 	// in Application Insights trackAvailability() events
 	TestLocation string `json:"test_location,omitempty"`
 
+	// InsecureTLS may be used to allow insecure TLS certificates
+	// in HTTPS status checks
+	InsecureTLS bool `json:"insecure_tls,omitempty"`
+
 	// TelemetryClient is the appinsights.Client with which to
 	// send Application Insights trackAvailability() events
 	// Automatically created if InstrumentationKey is set.
@@ -107,6 +112,9 @@ func (c Checker) Check() (types.Result, error) {
 	}
 	if c.Client == nil {
 		c.Client = DefaultHTTPClient
+	}
+	if c.InsecureTLS {
+		c.Client.Transport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 	if c.UpStatus == 0 {
 		c.UpStatus = http.StatusOK
