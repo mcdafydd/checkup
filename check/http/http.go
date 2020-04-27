@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/microsoft/ApplicationInsights-Go/appinsights"
+
 	"github.com/sourcegraph/checkup/types"
 )
 
@@ -62,6 +64,19 @@ type Checker struct {
 	// occurs between attempts.
 	AttemptSpacing time.Duration `json:"attempt_spacing,omitempty"`
 
+	// InstrumentationKey is a GUID used to send trackAvailability()
+	// telemetry to Application Insights
+	InstrumentationKey string `json:"instrumentation_key,omitempty"`
+
+	// TestLocation identifies the test location sent
+	// in Application Insights trackAvailability() events
+	TestLocation string `json:"test_location,omitempty"`
+
+	// TelemetryClient is the appinsights.Client with which to
+	// send Application Insights trackAvailability() events
+	// Automatically created if InstrumentationKey is set.
+	TelemetryClient appinsights.TelemetryClient `json:"-"`
+
 	// Client is the http.Client with which to make
 	// requests. If not set, DefaultHTTPClient is
 	// used.
@@ -96,6 +111,12 @@ func (c Checker) Check() (types.Result, error) {
 	if c.UpStatus == 0 {
 		c.UpStatus = http.StatusOK
 	}
+	if c.TestLocation == "" {
+		c.TestLocation = "Checkup"
+	}
+	if c.InstrumentationKey != "" {
+		c.TelemetryClient = appinsights.NewTelemetryClient(c.InstrumentationKey)
+	}
 
 	result := types.NewResult()
 	result.Title = c.Name
@@ -118,7 +139,27 @@ func (c Checker) Check() (types.Result, error) {
 
 	result.Times = c.doChecks(req)
 
-	return c.conclude(result), nil
+	conclude := c.conclude(result)
+
+	availability := appinsights.NewAvailabilityTelemetry(conclude.Title, conclude.ThresholdRTT, conclude.Healthy)
+	availability.RunLocation = c.TestLocation
+
+	// Diagnostics message
+	rtts := make([]string, len(conclude.Times))
+	availability.Message = conclude.Notice
+	if conclude.Degraded {
+		for i := 0; i < c.Attempts; i++ {
+			rtts[i] = conclude.Times[i].RTT.String()
+		}
+		availability.Message = fmt.Sprintf("%s - Number of attempts = %d (%s)", availability.Message, len(conclude.Times), strings.Join(rtts, " "))
+	}
+	// Id is used for correlation with the target service
+	//availability.Id = requestId
+
+	// Submit the telemetry
+	c.TelemetryClient.Track(availability)
+
+	return conclude, nil
 }
 
 // doChecks executes req using c.Client and returns each attempt.
@@ -132,10 +173,12 @@ func (c Checker) doChecks(req *http.Request) types.Attempts {
 			checks[i].Error = err.Error()
 			continue
 		}
+
 		err = c.checkDown(resp)
 		if err != nil {
 			checks[i].Error = err.Error()
 		}
+
 		resp.Body.Close()
 		if c.AttemptSpacing > 0 {
 			time.Sleep(c.AttemptSpacing)
