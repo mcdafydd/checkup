@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"net/url"
 )
 
 // ProvisionInfo contains the results of provisioning a new
@@ -24,6 +25,9 @@ type ProvisionInfo struct {
 	// expect this value to be made public. (It should provide
 	// read-only access to the checks.)
 	PublicAccessKey string `json:"public_access_key"`
+
+	// AzureStorageSASURL specifies the access key URL
+	AzureStorageSASURL url.URL `json:"azure_storage_sas_url"`
 }
 
 // String returns the information in i in a human-readable format
@@ -34,8 +38,9 @@ func (i ProvisionInfo) String() string {
 	s += fmt.Sprintf("            Username: %s\n", i.Username)
 	s += fmt.Sprintf("Public Access Key ID: %s\n", i.PublicAccessKeyID)
 	s += fmt.Sprintf("   Public Access Key: %s\n\n", i.PublicAccessKey)
+	s += fmt.Sprintf("   Azure Storage SAS URL: %s\n\n", i.AzureStorageSASURL)
 	s += `IMPORTANT: Copy the Public Access Key ID and Public Access
-Key into the config.js file for your status page. You will
+Key, or Azure Storage SAS URL, into the config.js file for your status page. You will
 not be shown these credentials again.`
 	return s
 }

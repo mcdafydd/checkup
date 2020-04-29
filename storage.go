@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/sourcegraph/checkup/storage/azblob"
+	//"github.com/sourcegraph/checkup/storage/azdo"
 	"github.com/sourcegraph/checkup/storage/fs"
 	"github.com/sourcegraph/checkup/storage/github"
 	"github.com/sourcegraph/checkup/storage/s3"
@@ -20,6 +22,10 @@ func storageDecode(typeName string, config json.RawMessage) (Storage, error) {
 		return fs.New(config)
 	case sql.Type:
 		return sql.New(config)
+	case azblob.Type:
+		return azblob.New(config)
+	/*case azdo.Type:
+	return azdo.New(config)*/
 	default:
 		return nil, fmt.Errorf(errUnknownStorageType, typeName)
 	}

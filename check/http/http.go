@@ -10,8 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/microsoft/ApplicationInsights-Go/appinsights"
-
+	"github.com/Microsoft/ApplicationInsights-Go/appinsights"
 	"github.com/sourcegraph/checkup/types"
 )
 
@@ -114,16 +113,13 @@ func (c Checker) Check() (types.Result, error) {
 		c.Client = DefaultHTTPClient
 	}
 	if c.InsecureTLS {
-		c.Client.Transport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		c.Client.Transport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: c.InsecureTLS}
 	}
 	if c.UpStatus == 0 {
 		c.UpStatus = http.StatusOK
 	}
 	if c.TestLocation == "" {
-		c.TestLocation = "Checkup"
-	}
-	if c.InstrumentationKey != "" {
-		c.TelemetryClient = appinsights.NewTelemetryClient(c.InstrumentationKey)
+		c.TestLocation = "Checkup HTTP"
 	}
 
 	result := types.NewResult()
@@ -146,26 +142,29 @@ func (c Checker) Check() (types.Result, error) {
 	}
 
 	result.Times = c.doChecks(req)
-
 	conclude := c.conclude(result)
-
-	availability := appinsights.NewAvailabilityTelemetry(conclude.Title, conclude.ThresholdRTT, conclude.Healthy)
-	availability.RunLocation = c.TestLocation
 
 	// Diagnostics message
 	rtts := make([]string, len(conclude.Times))
-	availability.Message = conclude.Notice
+	message := conclude.Notice
 	if conclude.Degraded {
 		for i := 0; i < c.Attempts; i++ {
 			rtts[i] = conclude.Times[i].RTT.String()
 		}
-		availability.Message = fmt.Sprintf("%s - Number of attempts = %d (%s)", availability.Message, len(conclude.Times), strings.Join(rtts, " "))
+		message = fmt.Sprintf("%s - Number of attempts = %d (%s)", message, len(conclude.Times), strings.Join(rtts, " "))
 	}
-	// Id is used for correlation with the target service
-	//availability.Id = requestId
 
-	// Submit the telemetry
-	c.TelemetryClient.Track(availability)
+	if c.InstrumentationKey != "" {
+		c.TelemetryClient = appinsights.NewTelemetryClient(c.InstrumentationKey)
+		availability := appinsights.NewAvailabilityTelemetry(conclude.Title, conclude.Stats.Mean, conclude.Healthy)
+		availability.RunLocation = c.TestLocation
+		availability.Message = message
+		// Id is used for correlation with the target service
+		//availability.Id = requestId
+
+		// Submit the telemetry
+		c.TelemetryClient.Track(availability)
+	}
 
 	return conclude, nil
 }
@@ -212,8 +211,8 @@ func (c Checker) conclude(result types.Result) types.Result {
 
 	// Check round trip time (degraded)
 	if c.ThresholdRTT > 0 {
-		stats := result.ComputeStats()
-		if stats.Median > c.ThresholdRTT {
+		result.Stats = result.ComputeStats()
+		if result.Stats.Median > c.ThresholdRTT {
 			result.Notice = fmt.Sprintf("median round trip time exceeded threshold (%s)", c.ThresholdRTT)
 			result.Degraded = true
 			return result
