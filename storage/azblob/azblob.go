@@ -29,7 +29,7 @@ type Storage struct {
 	AccountName string `json:"account_name"`
 
 	// AccountKey specifies a valid access key for the AccountName
-	// Azure Storage account.  Used by provision command.
+	// Azure Storage account.  Used by Provision().
 	AccountKey string `json:"account_key"`
 
 	// ContainerName specifies the name of the storage container.
@@ -101,20 +101,19 @@ func (s Storage) Maintain() error {
 		return nil
 	}
 
-	if s.SASURL == nil {
-		u, err := s.getSASURL()
-		if err != nil {
-			log.Fatal(err)
-		}
-		s.SASURL = u
+	if s.AccountName == "" || s.AccountKey == "" {
+		log.Fatal("Must supply both a valid Azure Storage Account Name and Account Key")
 	}
-	if !s.checkSASURL() {
-		log.Fatalf("Failed to get valid storage SAS for storage account %s", s.AccountName)
+
+	credentials, err := azblob.NewSharedKeyCredential(s.AccountName, s.AccountKey)
+	if err != nil {
+		errmsg := fmt.Errorf("Cannot create Azure Storage credential: %w", err)
+		log.Fatal(errmsg)
 	}
 
 	ctx := context.Background()
 	blobsToDelete := []azblob.BlobItem{}
-	p := azblob.NewPipeline(azblob.NewAnonymousCredential(), azblob.PipelineOptions{})
+	p := azblob.NewPipeline(credentials, azblob.PipelineOptions{})
 	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net", s.AccountName))
 	serviceURL := azblob.NewServiceURL(*u, p)
 	containerSvc := newAzContainer(serviceURL, s.ContainerName)
@@ -123,7 +122,7 @@ func (s Storage) Maintain() error {
 	for marker := (azblob.Marker{}); marker.NotDone(); {
 		listBlob, err := containerSvc.ListBlobsFlatSegment(ctx, marker, azblob.ListBlobsSegmentOptions{})
 		if err != nil {
-			errmsg := fmt.Errorf("Cannot list Azure Blob container %s: %w", listBlob.ContainerName, err)
+			errmsg := fmt.Errorf("Cannot list Azure Blob container: %w", err)
 			log.Fatal(errmsg)
 		}
 		marker = listBlob.NextMarker
@@ -149,9 +148,12 @@ func (s Storage) Maintain() error {
 	return nil
 }
 
-// Provision creates a new Azure Storage Account container
-// for the storage account specified by s, and then creates a new
-// Shared Access Signature with proper permissions for Checkup.
+// Provision will perform the following steps for the storage account
+// specified by s:
+//   * Create a new Azure Storage Account container or warn if already exists
+//   * Create a Shared Access Signature with read-only permissions at the
+//     container-level, valid for one year
+//   * Creates a CORS rule for the web application
 //
 // Provision need only be called once per status page (container),
 // not once per endpoint.
@@ -173,8 +175,8 @@ func (s Storage) Provision() (types.ProvisionInfo, error) {
 	}
 
 	p := azblob.NewPipeline(credentials, azblob.PipelineOptions{})
-	u, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net", s.AccountName))
-	serviceURL := azblob.NewServiceURL(*u, p)
+	su, _ := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net", s.AccountName))
+	serviceURL := azblob.NewServiceURL(*su, p)
 
 	ctx := context.Background()
 	containerSvc := newAzContainer(serviceURL, s.ContainerName)
@@ -208,8 +210,26 @@ func (s Storage) Provision() (types.ProvisionInfo, error) {
 		log.Fatal(err)
 	}
 
+	// Create a read-only SAS URL for the newly provisioned container
+	sasQueryParams, err := azblob.BlobSASSignatureValues{
+		Protocol:      azblob.SASProtocolHTTPS,
+		ExpiryTime:    time.Now().UTC().Add(365 * 24 * time.Hour),
+		ContainerName: s.ContainerName,
+		BlobName:      "",
+		Permissions:   azblob.BlobSASPermissions{Read: true}.String(),
+	}.NewSASQueryParameters(credentials)
+	if err != nil {
+		return info, err
+	}
+	qp := sasQueryParams.Encode()
+	u, err := url.Parse(fmt.Sprintf("https://%s.blob.core.windows.net/%s/?%s",
+		s.AccountName, s.ContainerName, qp))
+	if err != nil {
+		return info, err
+	}
+
 	info.AzureStorageSASURL = *u
-	return info, nil
+	return info, err
 }
 
 // checkSASURL returns false if SAS expires within 15 minutes or has already expired
@@ -217,7 +237,7 @@ func (s Storage) checkSASURL() bool {
 	if s.SASURL != nil {
 		parts := azblob.NewBlobURLParts(*s.SASURL)
 		expiresAt := parts.SAS.ExpiryTime()
-		if expiresAt.After(time.Now().Add(time.Minute * -15)) {
+		if expiresAt.Before(time.Now().Add(time.Minute * 15)) {
 			log.Printf("Warning: SAS expiry within 15 minutes at %s.  Continuing.", expiresAt.Format(time.RFC3339))
 			return false
 		}

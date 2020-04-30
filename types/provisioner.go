@@ -38,7 +38,7 @@ func (i ProvisionInfo) String() string {
 	s += fmt.Sprintf("            Username: %s\n", i.Username)
 	s += fmt.Sprintf("Public Access Key ID: %s\n", i.PublicAccessKeyID)
 	s += fmt.Sprintf("   Public Access Key: %s\n\n", i.PublicAccessKey)
-	s += fmt.Sprintf("   Azure Storage SAS URL: %s\n\n", i.AzureStorageSASURL)
+	s += fmt.Sprintf("   Azure Storage SAS URL: %s\n\n", i.AzureStorageSASURL.String())
 	s += `IMPORTANT: Copy the Public Access Key ID and Public Access
 Key, or Azure Storage SAS URL, into the config.js file for your status page. You will
 not be shown these credentials again.`
