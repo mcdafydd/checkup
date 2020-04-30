@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/url"
+	"regexp"
 	"time"
 
 	"github.com/Azure/azure-storage-blob-go/azblob"
@@ -76,9 +77,9 @@ func (s Storage) Store(results []types.Result) error {
 	ctx := context.Background()
 	containerSvc := newAzContainer(serviceURL, s.ContainerName)
 	blobSvc := containerSvc.NewBlockBlobURL(*fs.GenerateFilename())
-	resp, err := blobSvc.Upload(ctx, bytes.NewReader(jsonBytes), azblob.BlobHTTPHeaders{ContentType: "application/json"}, azblob.Metadata{}, azblob.BlobAccessConditions{})
+	_, err := blobSvc.Upload(ctx, bytes.NewReader(jsonBytes), azblob.BlobHTTPHeaders{ContentType: "application/json"}, azblob.Metadata{}, azblob.BlobAccessConditions{})
 	if err != nil {
-		errmsg := fmt.Errorf("Cannot upload Azure Blob: %w (request-id %s) %s", err, resp.RequestID(), resp.ErrorCode())
+		errmsg := fmt.Errorf("Cannot upload Azure Blob: %w", err)
 		log.Fatal(errmsg)
 	}
 	return err
@@ -147,11 +148,16 @@ func (s Storage) Maintain() error {
 // not once per endpoint.
 func (s Storage) Provision() (types.ProvisionInfo, error) {
 	var info types.ProvisionInfo
+	validStorageAccount := regexp.MustCompile("^[0-9a-z]{3,24}$")
 
 	// TODO: add SAS URL support
 	if s.AccountName == "" || s.AccountKey == "" {
 		log.Fatal("Must supply both a valid Azure Storage Account Name and Account Key")
 	}
+	if !validStorageAccount.MatchString(s.ContainerName) {
+		log.Fatal("Container_name must be between 3 and 24 characters, lowercase, and only contain letters or numbers.")
+	}
+
 	credentials, err := azblob.NewSharedKeyCredential(s.AccountName, s.AccountKey)
 	if err != nil {
 		errmsg := fmt.Errorf("Cannot create Azure Storage credential: %w", err)
@@ -163,11 +169,10 @@ func (s Storage) Provision() (types.ProvisionInfo, error) {
 	serviceURL := azblob.NewServiceURL(*u, p)
 
 	ctx := context.Background()
-	//validStorageAccount     = regexp.MustCompile("^[0-9a-z]{3,24}$")
 	containerSvc := newAzContainer(serviceURL, s.ContainerName)
 
-	resp, err := containerSvc.Create(ctx, azblob.Metadata{}, azblob.PublicAccessNone)
-	if resp.StatusCode() != 409 && err != nil {
+	_, err := containerSvc.Create(ctx, azblob.Metadata{}, azblob.PublicAccessNone)
+	if err != nil {
 		errmsg := fmt.Errorf("Cannot create Azure Blob container %s: %w", s.ContainerName, err)
 		log.Fatal(errmsg)
 	}
@@ -185,8 +190,8 @@ func (s Storage) Provision() (types.ProvisionInfo, error) {
 			corsrule,
 		},
 	}
-	setPropResp, err := serviceURL.SetProperties(ctx, properties)
-	if setPropResp.StatusCode() != 409 && err != nil {
+	_, err := serviceURL.SetProperties(ctx, properties)
+	if err != nil {
 		errmsg := fmt.Errorf("Cannot set CORS rule on Azure Storage container: %w", err)
 		log.Fatal(errmsg)
 	}
@@ -218,12 +223,6 @@ func (s Storage) Provision() (types.ProvisionInfo, error) {
 // newAzContainer calls azblob.NewContainerURL(), but may be replaced for mocking in tests.
 var newAzContainer = func(serviceURL azblob.ServiceURL, container string) azContainerSvc {
 	return serviceURL.NewContainerURL(container)
-}
-
-// azBlobSvc is used for mocking the azblob.BlockBlobURL type.
-type azBlobSvc interface {
-	Upload(context.Context, io.ReadSeeker, azblob.BlobHTTPHeaders, azblob.Metadata, azblob.BlobAccessConditions) (*azblob.BlockBlobUploadResponse, error)
-	Delete(context.Context, azblob.DeleteSnapshotsOptionType, azblob.BlobAccessConditions) (*azblob.BlobDeleteResponse, error)
 }
 
 // azContainerSvc is used for mocking the azblob.ContainerURL type.
