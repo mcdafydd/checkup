@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"regexp"
 	"time"
 
+	"github.com/Azure/azure-pipeline-go/pipeline"
 	"github.com/Azure/azure-storage-blob-go/azblob"
 	"github.com/sourcegraph/checkup/storage/fs"
 	"github.com/sourcegraph/checkup/types"
@@ -18,7 +20,7 @@ import (
 // Type should match the package name
 const Type = "azblob"
 
-// Storage is a way to store checkup results in an S3 bucket.
+// Storage is a way to store checkup results in an Azure Storage Account Blob container.
 type Storage struct {
 	// SASURL caches a valid Shared Access Signature URL
 	// used by Store().
@@ -51,12 +53,12 @@ func New(config json.RawMessage) (Storage, error) {
 	if storage.SASURL == nil {
 		u, err := storage.getSASURL()
 		if err != nil {
-			log.Fatal(err)
+			return storage, err
 		}
 		storage.SASURL = u
 	}
 	if !storage.checkSASURL() {
-		log.Fatalf("Failed to get valid storage SAS for storage account %s", storage.AccountName)
+		return storage, fmt.Errorf("Failed to get valid storage SAS for storage account %s", storage.AccountName)
 	}
 	return storage, err
 }
@@ -66,31 +68,23 @@ func (Storage) Type() string {
 	return Type
 }
 
-// Store stores results on S3 according to the configuration in s.
+// Store stores results on Azure Blob storage according to the configuration in s.
 func (s Storage) Store(results []types.Result) error {
 	jsonBytes, err := json.Marshal(results)
 	if err != nil {
 		return err
 	}
-	if s.SASURL == nil {
-		u, err := s.getSASURL()
-		if err != nil {
-			log.Fatal(err)
-		}
-		s.SASURL = u
-	}
 	if !s.checkSASURL() {
-		log.Fatalf("Failed to get valid storage SAS for storage account %s", s.AccountName)
+		return fmt.Errorf("Failed to get valid storage SAS for storage account %s", s.AccountName)
 	}
 
 	ctx := context.Background()
 	newBlobURLParts := azblob.NewBlobURLParts(*s.SASURL)
 	newBlobURLParts.BlobName = *fs.GenerateFilename()
-	blobURL := azblob.NewBlockBlobURL(newBlobURLParts.URL(), azblob.NewPipeline(azblob.NewAnonymousCredential(), azblob.PipelineOptions{}))
+	blobURL := newBlockBlobURL(newBlobURLParts.URL(), azblob.NewPipeline(azblob.NewAnonymousCredential(), azblob.PipelineOptions{}))
 	_, err = blobURL.Upload(ctx, bytes.NewReader(jsonBytes), azblob.BlobHTTPHeaders{ContentType: "application/json"}, azblob.Metadata{}, azblob.BlobAccessConditions{})
 	if err != nil {
-		errmsg := fmt.Errorf("Cannot upload Azure Blob: %w", err)
-		log.Fatal(errmsg)
+		return fmt.Errorf("Cannot upload Azure Blob: %w", err)
 	}
 	return err
 }
@@ -102,13 +96,12 @@ func (s Storage) Maintain() error {
 	}
 
 	if s.AccountName == "" || s.AccountKey == "" {
-		log.Fatal("Must supply both a valid Azure Storage Account Name and Account Key")
+		return fmt.Errorf("Must supply both a valid Azure Storage Account Name and Account Key")
 	}
 
 	credentials, err := azblob.NewSharedKeyCredential(s.AccountName, s.AccountKey)
 	if err != nil {
-		errmsg := fmt.Errorf("Cannot create Azure Storage credential: %w", err)
-		log.Fatal(errmsg)
+		return fmt.Errorf("Cannot create Azure Storage credential: %w", err)
 	}
 
 	ctx := context.Background()
@@ -122,8 +115,7 @@ func (s Storage) Maintain() error {
 	for marker := (azblob.Marker{}); marker.NotDone(); {
 		listBlob, err := containerSvc.ListBlobsFlatSegment(ctx, marker, azblob.ListBlobsSegmentOptions{})
 		if err != nil {
-			errmsg := fmt.Errorf("Cannot list Azure Blob container: %w", err)
-			log.Fatal(errmsg)
+			return fmt.Errorf("Cannot list Azure Blob container: %w", err)
 		}
 		marker = listBlob.NextMarker
 
@@ -138,11 +130,10 @@ func (s Storage) Maintain() error {
 	for _, del := range blobsToDelete {
 		delBlobURLParts := azblob.NewBlobURLParts(*s.SASURL)
 		delBlobURLParts.BlobName = del.Name
-		blobURL := azblob.NewBlockBlobURL(delBlobURLParts.URL(), azblob.NewPipeline(azblob.NewAnonymousCredential(), azblob.PipelineOptions{}))
+		blobURL := newBlockBlobURL(delBlobURLParts.URL(), azblob.NewPipeline(azblob.NewAnonymousCredential(), azblob.PipelineOptions{}))
 		_, err := blobURL.Delete(ctx, azblob.DeleteSnapshotsOptionNone, azblob.BlobAccessConditions{})
 		if err != nil {
-			errmsg := fmt.Errorf("Cannot delete blobs in Azure Blob container: %w", err)
-			log.Fatal(errmsg)
+			return fmt.Errorf("Cannot delete blobs in Azure Blob container: %w", err)
 		}
 	}
 	return nil
@@ -170,8 +161,7 @@ func (s Storage) Provision() (types.ProvisionInfo, error) {
 
 	credentials, err := azblob.NewSharedKeyCredential(s.AccountName, s.AccountKey)
 	if err != nil {
-		errmsg := fmt.Errorf("Cannot create Azure Storage credential: %w", err)
-		log.Fatal(errmsg)
+		return info, fmt.Errorf("Cannot create Azure Storage credential: %w", err)
 	}
 
 	p := azblob.NewPipeline(credentials, azblob.PipelineOptions{})
@@ -188,7 +178,7 @@ func (s Storage) Provision() (types.ProvisionInfo, error) {
 				log.Printf("Warning: Container %s already exists.  Continuing.", s.ContainerName)
 			}
 		} else {
-			log.Fatal(err)
+			return info, err
 		}
 	}
 
@@ -207,7 +197,7 @@ func (s Storage) Provision() (types.ProvisionInfo, error) {
 	}
 	_, err = serviceURL.SetProperties(ctx, properties)
 	if err != nil {
-		log.Fatal(err)
+		return info, fmt.Errorf("Failed to provision Azure blob storage: %w", err)
 	}
 
 	// Create a read-only SAS URL for the newly provisioned container
@@ -234,16 +224,25 @@ func (s Storage) Provision() (types.ProvisionInfo, error) {
 
 // checkSASURL returns false if SAS expires within 15 minutes or has already expired
 func (s Storage) checkSASURL() bool {
-	if s.SASURL != nil {
+	if s.SASURL == nil {
+		u, err := s.getSASURL()
+		if err != nil {
+			return false
+		}
+		s.SASURL = u
+	} else {
 		parts := azblob.NewBlobURLParts(*s.SASURL)
 		expiresAt := parts.SAS.ExpiryTime()
 		if expiresAt.Before(time.Now().Add(time.Minute * 15)) {
-			log.Printf("Warning: SAS expiry within 15 minutes at %s.  Continuing.", expiresAt.Format(time.RFC3339))
-			return false
+			log.Printf("Warning: SAS expired or expiring within 15 minutes at %s - attempting to get new SAS URL.", expiresAt.Format(time.RFC3339))
+			u, err := s.getSASURL()
+			if err != nil {
+				return false
+			}
+			s.SASURL = u
 		}
-		return true
 	}
-	return false
+	return true
 }
 
 // getSASURL returns a privileged SAS URL based on the configured Azure Storage account and key
@@ -277,6 +276,17 @@ func (s Storage) getSASURL() (*url.URL, error) {
 // newAzContainer calls azblob.NewContainerURL(), but may be replaced for mocking in tests.
 var newAzContainer = func(serviceURL azblob.ServiceURL, container string) azContainerSvc {
 	return serviceURL.NewContainerURL(container)
+}
+
+// newBlockBlobURL calls azblob.NewBlockBlobURL(), but may be replaced for mocking in tests.
+var newBlockBlobURL = func(url url.URL, p pipeline.Pipeline) azBlobSvc {
+	return azblob.NewBlockBlobURL(url, p)
+}
+
+// azBlobSvc is used for mocking the azblob.BlockBlobURL and azblob.BlobURL types.
+type azBlobSvc interface {
+	Upload(context.Context, io.ReadSeeker, azblob.BlobHTTPHeaders, azblob.Metadata, azblob.BlobAccessConditions) (*azblob.BlockBlobUploadResponse, error)
+	Delete(context.Context, azblob.DeleteSnapshotsOptionType, azblob.BlobAccessConditions) (*azblob.BlobDeleteResponse, error)
 }
 
 // azContainerSvc is used for mocking the azblob.ContainerURL type.
