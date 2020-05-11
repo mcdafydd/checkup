@@ -2,6 +2,7 @@ package http
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -63,9 +64,13 @@ type Checker struct {
 	// occurs between attempts.
 	AttemptSpacing time.Duration `json:"attempt_spacing,omitempty"`
 
-	// InsecureTLS may be used to allow insecure TLS certificates
-	// in HTTPS status checks
-	InsecureTLS bool `json:"insecure_tls,omitempty"`
+	// TLSSkipVerify controls whether to skip server TLS
+	// certificat validation or not.
+	TLSSkipVerify bool `json:"tls_skip_verify,omitempty"`
+
+	// TLSCAFile is the Certificate Authority used
+	// to validate the server TLS certificate.
+	TLSCAFile string `json:"tls_ca_file,omitempty"`
 
 	// Client is the http.Client with which to make
 	// requests. If not set, DefaultHTTPClient is
@@ -97,9 +102,6 @@ func (c Checker) Check() (types.Result, error) {
 	}
 	if c.Client == nil {
 		c.Client = DefaultHTTPClient
-	}
-	if c.InsecureTLS {
-		c.Client.Transport.(*http.Transport).TLSClientConfig = &tls.Config{InsecureSkipVerify: c.InsecureTLS}
 	}
 	if c.UpStatus == 0 {
 		c.UpStatus = http.StatusOK
@@ -134,6 +136,26 @@ func (c Checker) doChecks(req *http.Request) types.Attempts {
 	checks := make(types.Attempts, c.Attempts)
 	for i := 0; i < c.Attempts; i++ {
 		start := time.Now()
+
+		// TLS config based on configuration
+		var tlsConfig tls.Config
+		if c.TLSSkipVerify {
+			tlsConfig.InsecureSkipVerify = c.TLSSkipVerify
+		}
+		if c.TLSCAFile != "" {
+			rootPEM, err := ioutil.ReadFile(c.TLSCAFile)
+			if err != nil || rootPEM == nil {
+				checks[i].Error = "failed to read root certificate"
+			}
+			pool := x509.NewCertPool()
+			ok := pool.AppendCertsFromPEM([]byte(rootPEM))
+			if !ok {
+				checks[i].Error = "failed to parse root certificate"
+			}
+			tlsConfig.RootCAs = pool
+		}
+		c.Client.Transport.(*http.Transport).TLSClientConfig = &tlsConfig
+
 		resp, err := c.Client.Do(req)
 		checks[i].RTT = time.Since(start)
 		if err != nil {

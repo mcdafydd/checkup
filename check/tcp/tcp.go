@@ -28,7 +28,7 @@ type Checker struct {
 	TLSEnabled bool `json:"tls,omitempty"`
 
 	// TLSSkipVerify controls whether to skip server TLS
-	// certificat validation or not.
+	// certificate validation or not.
 	TLSSkipVerify bool `json:"tls_skip_verify,omitempty"`
 
 	// TLSCAFile is the Certificate Authority used

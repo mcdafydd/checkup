@@ -64,10 +64,6 @@ type Checker struct {
 	// quickly in succession. By default, no waiting
 	// occurs between attempts.
 	AttemptSpacing time.Duration `json:"attempt_spacing,omitempty"`
-
-	// InsecureTLS may be used to allow insecure TLS certificates
-	// in HTTPS status checks
-	InsecureTLS bool `json:"insecure_tls,omitempty"`
 }
 
 // New creates a new Checker instance based on json config
