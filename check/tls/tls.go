@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
-	"strings"
 	"time"
 
-	"github.com/Microsoft/ApplicationInsights-Go/appinsights"
 	"github.com/sourcegraph/checkup/types"
 )
 
@@ -57,19 +55,6 @@ type Checker struct {
 	// trusted root CAs when connecting to TLS remotes.
 	TrustedRoots []string `json:"trusted_roots,omitempty"`
 
-	// InstrumentationKey is a GUID used to send trackAvailability()
-	// telemetry to Application Insights
-	InstrumentationKey string `json:"instrumentation_key,omitempty"`
-
-	// TestLocation identifies the test location sent
-	// in Application Insights trackAvailability() events
-	TestLocation string `json:"test_location,omitempty"`
-
-	// TelemetryClient is the appinsights.Client with which to
-	// send Application Insights trackAvailability() events
-	// Automatically created if InstrumentationKey is set.
-	TelemetryClient appinsights.TelemetryClient `json:"-"`
-
 	// tlsConfig is the config to use when making a TLS
 	// connection. Values in this struct take precedence
 	// over values described from the JSON (exported)
@@ -98,9 +83,6 @@ func (c Checker) Check() (types.Result, error) {
 	if c.CertExpiryThreshold == 0 {
 		c.CertExpiryThreshold = 24 * time.Hour * 14
 	}
-	if c.TestLocation == "" {
-		c.TestLocation = "Checkup TLS"
-	}
 
 	if len(c.TrustedRoots) > 0 {
 		if c.tlsConfig == nil {
@@ -127,30 +109,6 @@ func (c Checker) Check() (types.Result, error) {
 	result.Endpoint = c.URL
 	result.Times = attempts
 	result.ThresholdRTT = c.ThresholdRTT
-
-	conclude := c.conclude(conns, result)
-
-	// Diagnostics message
-	rtts := make([]string, len(conclude.Times))
-	message := conclude.Notice
-	if conclude.Degraded {
-		for i := 0; i < c.Attempts; i++ {
-			rtts[i] = conclude.Times[i].RTT.String()
-		}
-		message = fmt.Sprintf("%s - Number of attempts = %d (%s)", message, len(conclude.Times), strings.Join(rtts, " "))
-	}
-
-	if c.InstrumentationKey != "" {
-		c.TelemetryClient = appinsights.NewTelemetryClient(c.InstrumentationKey)
-		availability := appinsights.NewAvailabilityTelemetry(conclude.Title, conclude.Stats.Mean, conclude.Healthy)
-		availability.RunLocation = c.TestLocation
-		availability.Message = message
-		// Id is used for correlation with the target service
-		//availability.Id = requestId
-
-		// Submit the telemetry
-		c.TelemetryClient.Track(availability)
-	}
 
 	return c.conclude(conns, result), nil
 }

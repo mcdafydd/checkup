@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Microsoft/ApplicationInsights-Go/appinsights"
 	"github.com/sourcegraph/checkup/types"
 )
 
@@ -64,22 +63,9 @@ type Checker struct {
 	// occurs between attempts.
 	AttemptSpacing time.Duration `json:"attempt_spacing,omitempty"`
 
-	// InstrumentationKey is a GUID used to send trackAvailability()
-	// telemetry to Application Insights
-	InstrumentationKey string `json:"instrumentation_key,omitempty"`
-
-	// TestLocation identifies the test location sent
-	// in Application Insights trackAvailability() events
-	TestLocation string `json:"test_location,omitempty"`
-
 	// InsecureTLS may be used to allow insecure TLS certificates
 	// in HTTPS status checks
 	InsecureTLS bool `json:"insecure_tls,omitempty"`
-
-	// TelemetryClient is the appinsights.Client with which to
-	// send Application Insights trackAvailability() events
-	// Automatically created if InstrumentationKey is set.
-	TelemetryClient appinsights.TelemetryClient `json:"-"`
 
 	// Client is the http.Client with which to make
 	// requests. If not set, DefaultHTTPClient is
@@ -118,9 +104,6 @@ func (c Checker) Check() (types.Result, error) {
 	if c.UpStatus == 0 {
 		c.UpStatus = http.StatusOK
 	}
-	if c.TestLocation == "" {
-		c.TestLocation = "Checkup HTTP"
-	}
 
 	result := types.NewResult()
 	result.Title = c.Name
@@ -142,31 +125,8 @@ func (c Checker) Check() (types.Result, error) {
 	}
 
 	result.Times = c.doChecks(req)
-	conclude := c.conclude(result)
 
-	// Diagnostics message
-	rtts := make([]string, len(conclude.Times))
-	message := conclude.Notice
-	if conclude.Degraded {
-		for i := 0; i < c.Attempts; i++ {
-			rtts[i] = conclude.Times[i].RTT.String()
-		}
-		message = fmt.Sprintf("%s - Number of attempts = %d (%s)", message, len(conclude.Times), strings.Join(rtts, " "))
-	}
-
-	if c.InstrumentationKey != "" {
-		c.TelemetryClient = appinsights.NewTelemetryClient(c.InstrumentationKey)
-		availability := appinsights.NewAvailabilityTelemetry(conclude.Title, conclude.Stats.Mean, conclude.Healthy)
-		availability.RunLocation = c.TestLocation
-		availability.Message = message
-		// Id is used for correlation with the target service
-		//availability.Id = requestId
-
-		// Submit the telemetry
-		c.TelemetryClient.Track(availability)
-	}
-
-	return conclude, nil
+	return c.conclude(result), nil
 }
 
 // doChecks executes req using c.Client and returns each attempt.
