@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/ApplicationInsights-Go/appinsights"
 	"github.com/sourcegraph/checkup/types"
 )
@@ -64,17 +65,21 @@ func (c Exporter) Export(results []types.Result) error {
 func (c Exporter) Send(conclude types.Result) error {
 	attempts := len(conclude.Times)
 	rtts := make([]string, attempts)
-	message := conclude.Notice
+	message := "Passed"
 	if conclude.Degraded || conclude.Down {
 		for i := 0; i < attempts; i++ {
 			rtts[i] = conclude.Times[i].RTT.String()
 		}
-		message = fmt.Sprintf("%s - Number of attempts = %d (%s)", message, len(conclude.Times), strings.Join(rtts, " "))
+		message = fmt.Sprintf("Number of attempts = %d (%s)", len(conclude.Times), strings.Join(rtts, " "))
+		if conclude.Notice != "" {
+			message = fmt.Sprintf("%s - ", message)
+		}
 	}
 
 	availability := appinsights.NewAvailabilityTelemetry(conclude.Title, conclude.Stats.Mean, conclude.Healthy)
 	availability.RunLocation = c.TestLocation
 	availability.Message = message
+	availability.Id = uuid.New().String()
 
 	// Submit the telemetry
 	c.TelemetryClient.Track(availability)
