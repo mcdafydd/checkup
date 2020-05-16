@@ -107,7 +107,10 @@ func (c Checker) doChecks() types.Attempts {
 				if err != nil || rootPEM == nil {
 					checks[i].Error = "failed to read root certificate"
 				}
-				pool := x509.NewCertPool()
+				pool, _ := x509.SystemCertPool()
+				if pool == nil {
+					pool = x509.NewCertPool()
+				}
 				ok := pool.AppendCertsFromPEM([]byte(rootPEM))
 				if !ok {
 					checks[i].Error = "failed to parse root certificate"
