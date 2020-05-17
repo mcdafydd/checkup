@@ -27,10 +27,13 @@ type Exporter struct {
 	// in Application Insights trackAvailability() events
 	TestLocation string `json:"test_location,omitempty"`
 
+	// Tags will be applied to all telemetry items
+	Tags map[string]string `json:"tags,omitempty"`
+
 	// TelemetryClient is the appinsights.Client with which to
 	// send Application Insights trackAvailability() events
 	// Automatically created if InstrumentationKey is set.
-	TelemetryClient appinsights.TelemetryClient `json:"-"`
+	TelemetryClient appinsights.TelemetryClient
 }
 
 // New creates a new Exporter instance based on json config
@@ -52,17 +55,14 @@ func (Exporter) Type() string {
 // Export takes a list of Checker results and sends them to the configured
 // Application Insights instance.
 func (c Exporter) Export(results []types.Result) error {
-	errs := make(types.Errors, 0)
 	for _, result := range results {
-		if err := c.Send(result); err != nil {
-			errs = append(errs, err)
-		}
+		c.Send(result)
 	}
-	return errs
+	return nil
 }
 
 // Send sends a result to the exporter
-func (c Exporter) Send(conclude types.Result) error {
+func (c Exporter) Send(conclude types.Result) {
 	attempts := len(conclude.Times)
 	rtts := make([]string, attempts)
 	message := "Passed"
@@ -80,8 +80,11 @@ func (c Exporter) Send(conclude types.Result) error {
 	availability.RunLocation = c.TestLocation
 	availability.Message = message
 	availability.Id = uuid.New().String()
+	for k, v := range c.Tags {
+		availability.Tags[k] = v
+	}
 
 	// Submit the telemetry
 	c.TelemetryClient.Track(availability)
-	return nil
+	return
 }
