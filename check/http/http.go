@@ -4,14 +4,23 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/sourcegraph/checkup/types"
+)
+
+var (
+	errReadingRootCert = errors.New("error reading root certificate")
+	errParsingRootCert = errors.New("error parsing root certificate")
+	errParsingURL      = errors.New("error parsing URL")
 )
 
 // Type should match the package name
@@ -97,19 +106,57 @@ func (Checker) Type() string {
 // Check performs checks using c according to its configuration.
 // An error is only returned if there is a configuration error.
 func (c Checker) Check() (types.Result, error) {
+	result := types.NewResult()
+	result.Title = c.Name
+	result.Endpoint = c.URL
+
 	if c.Attempts < 1 {
 		c.Attempts = 1
 	}
 	if c.Client == nil {
 		c.Client = DefaultHTTPClient
+		// TLS config based on configuration
+		var tlsConfig tls.Config
+		if c.TLSSkipVerify {
+			tlsConfig.InsecureSkipVerify = c.TLSSkipVerify
+		}
+		if c.TLSCAFile != "" {
+			rootPEM, err := ioutil.ReadFile(c.TLSCAFile)
+			if err != nil || rootPEM == nil {
+				return result, errReadingRootCert
+			}
+			pool, _ := x509.SystemCertPool()
+			if pool == nil {
+				pool = x509.NewCertPool()
+			}
+			ok := pool.AppendCertsFromPEM(rootPEM)
+			if !ok {
+				return result, errParsingRootCert
+			}
+			tlsConfig.RootCAs = pool
+		}
+		dialer := func(network, address string) (net.Conn, error) {
+			dialer := &net.Dialer{
+				Timeout: 5 * time.Second,
+			}
+			url, err := url.Parse(c.URL)
+			if err != nil {
+				return nil, errParsingURL
+			}
+			port := url.Port()
+			if port == "" {
+				port = "443"
+			}
+			addr := fmt.Sprintf("%s:%s", url.Host, port)
+			return tls.DialWithDialer(dialer, "tcp", addr, &tlsConfig)
+		}
+		tr := c.Client.Transport.(*http.Transport).Clone()
+		tr.DialTLS = dialer
+		c.Client.Transport = tr
 	}
 	if c.UpStatus == 0 {
 		c.UpStatus = http.StatusOK
 	}
-
-	result := types.NewResult()
-	result.Title = c.Name
-	result.Endpoint = c.URL
 
 	req, err := http.NewRequest("GET", c.URL, nil)
 	if err != nil {
@@ -126,6 +173,12 @@ func (c Checker) Check() (types.Result, error) {
 		}
 	}
 
+	dump, err := httputil.DumpRequestOut(req, true)
+	if err != nil {
+		fmt.Println(err)
+	}
+	fmt.Printf("%q", dump)
+
 	result.Times = c.doChecks(req)
 
 	return c.conclude(result), nil
@@ -133,33 +186,23 @@ func (c Checker) Check() (types.Result, error) {
 
 // doChecks executes req using c.Client and returns each attempt.
 func (c Checker) doChecks(req *http.Request) types.Attempts {
+	var err error
+
 	checks := make(types.Attempts, c.Attempts)
+	if err != nil {
+		return checks
+	}
 	for i := 0; i < c.Attempts; i++ {
 		start := time.Now()
 
-		// TLS config based on configuration
-		var tlsConfig tls.Config
-		if c.TLSSkipVerify {
-			tlsConfig.InsecureSkipVerify = c.TLSSkipVerify
-		}
-		if c.TLSCAFile != "" {
-			rootPEM, err := ioutil.ReadFile(c.TLSCAFile)
-			if err != nil || rootPEM == nil {
-				checks[i].Error = "failed to read root certificate"
-			}
-			pool, _ := x509.SystemCertPool()
-			if pool == nil {
-				pool = x509.NewCertPool()
-			}
-			ok := pool.AppendCertsFromPEM([]byte(rootPEM))
-			if !ok {
-				checks[i].Error = "failed to parse root certificate"
-			}
-			tlsConfig.RootCAs = pool
-		}
-		c.Client.Transport.(*http.Transport).TLSClientConfig = &tlsConfig
-
 		resp, err := c.Client.Do(req)
+
+		dump, err := httputil.DumpResponse(resp, true)
+		if err != nil {
+			fmt.Println(err)
+		}
+		fmt.Printf("%q", dump)
+
 		checks[i].RTT = time.Since(start)
 		if err != nil {
 			checks[i].Error = err.Error()

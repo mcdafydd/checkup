@@ -117,7 +117,7 @@ func (c Checker) doChecks() types.Attempts {
 				if pool == nil {
 					pool = x509.NewCertPool()
 				}
-				ok := pool.AppendCertsFromPEM([]byte(rootPEM))
+				ok := pool.AppendCertsFromPEM(rootPEM)
 				if !ok {
 					return nil, errParsingRootCert
 				}
