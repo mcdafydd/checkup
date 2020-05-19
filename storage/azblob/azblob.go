@@ -22,8 +22,8 @@ const Type = "azblob"
 
 // Storage is a way to store checkup results in an Azure Storage Account Blob container.
 type Storage struct {
-	// SASURL caches a valid Shared Access Signature URL
-	// used by Store().
+	// Optional. If SASURL is not specified, AccountName and AccountKey will be used
+	// to generate and refresh SAS URLs as needed.  Used by Store().
 	SASURL *url.URL `json:"sas_url"`
 
 	// AccountName specifies the name of the Azure Storage account.
@@ -38,10 +38,9 @@ type Storage struct {
 	// This container will be created if it does not exist.
 	ContainerName string `json:"container_name"`
 
-	// Check files older than CheckExpiry will be
-	// deleted on calls to Maintain(). If this is
-	// the zero value, no old check files will be
-	// deleted.
+	// Check files older than CheckExpiry will be deleted on calls
+	// to Maintain(). If this is the zero value, no old check files
+	// will be deleted.
 	CheckExpiry time.Duration `json:"check_expiry,omitempty"`
 }
 
@@ -50,14 +49,7 @@ func New(config json.RawMessage) (Storage, error) {
 	var storage Storage
 	err := json.Unmarshal(config, &storage)
 
-	if storage.SASURL == nil {
-		u, err := storage.getSASURL()
-		if err != nil {
-			return storage, err
-		}
-		storage.SASURL = u
-	}
-	if !storage.checkSASURL() {
+	if storage.SASURL, err = storage.getSASURL(); err != nil {
 		return storage, fmt.Errorf("Failed to get valid storage SAS for storage account %s", storage.AccountName)
 	}
 	return storage, err
@@ -74,7 +66,7 @@ func (s Storage) Store(results []types.Result) error {
 	if err != nil {
 		return err
 	}
-	if !s.checkSASURL() {
+	if s.SASURL, err = s.getSASURL(); err != nil {
 		return fmt.Errorf("Failed to get valid storage SAS for storage account %s", s.AccountName)
 	}
 
@@ -225,28 +217,22 @@ func (s Storage) Provision() (types.ProvisionInfo, error) {
 // checkSASURL returns false if SAS expires within 15 minutes or has already expired
 func (s Storage) checkSASURL() bool {
 	if s.SASURL == nil {
-		u, err := s.getSASURL()
-		if err != nil {
-			return false
-		}
-		s.SASURL = u
-	} else {
-		parts := azblob.NewBlobURLParts(*s.SASURL)
-		expiresAt := parts.SAS.ExpiryTime()
-		if expiresAt.Before(time.Now().Add(time.Minute * 15)) {
-			log.Printf("Warning: SAS expired or expiring within 15 minutes at %s - attempting to get new SAS URL.", expiresAt.Format(time.RFC3339))
-			u, err := s.getSASURL()
-			if err != nil {
-				return false
-			}
-			s.SASURL = u
-		}
+		return false
+	}
+	parts := azblob.NewBlobURLParts(*s.SASURL)
+	expiresAt := parts.SAS.ExpiryTime()
+	if expiresAt.Before(time.Now().Add(time.Minute * 15)) {
+		log.Printf("Warning: SAS expired or expiring within 15 minutes at %s - attempting to get new SAS URL.", expiresAt.Format(time.RFC3339))
+		return false
 	}
 	return true
 }
 
 // getSASURL returns a privileged SAS URL based on the configured Azure Storage account and key
 func (s Storage) getSASURL() (*url.URL, error) {
+	if s.checkSASURL() {
+		return s.SASURL, nil
+	}
 	credentials, err := azblob.NewSharedKeyCredential(s.AccountName, s.AccountKey)
 	if err != nil {
 		return nil, err

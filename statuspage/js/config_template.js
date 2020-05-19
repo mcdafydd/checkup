@@ -18,7 +18,10 @@ checkup.config = {
 		"BucketName": "<bucket name here>",
 
 		// Local file system (Caddy recommended: https://caddyserver.com)
-		"url": "http://127.0.0.1:2015/"
+		"url": "http://127.0.0.1:2015/",
+
+                // Azure Storage Account Blobs - if using, ensure these are public, READ-ONLY credentials!
+                "sas_url": "<Container SAS URL here>"
 	},
 
 	// The text to display along the top bar depending on overall status.

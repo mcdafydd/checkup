@@ -81,7 +81,7 @@ func (c Exporter) Send(conclude types.Result) {
 	availability.Message = message
 	availability.Id = uuid.New().String()
 	for k, v := range c.Tags {
-		availability.Tags[k] = v
+		c.TelemetryClient.Context().CommonProperties[k] = v
 	}
 
 	// Submit the telemetry
