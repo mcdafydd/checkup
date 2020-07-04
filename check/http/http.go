@@ -173,12 +173,6 @@ func (c Checker) Check() (types.Result, error) {
 		}
 	}
 
-	dump, err := httputil.DumpRequestOut(req, true)
-	if err != nil {
-		fmt.Println(err)
-	}
-	fmt.Printf("%q", dump)
-
 	result.Times = c.doChecks(req)
 
 	return c.conclude(result), nil
@@ -186,22 +180,12 @@ func (c Checker) Check() (types.Result, error) {
 
 // doChecks executes req using c.Client and returns each attempt.
 func (c Checker) doChecks(req *http.Request) types.Attempts {
-	var err error
 
 	checks := make(types.Attempts, c.Attempts)
-	if err != nil {
-		return checks
-	}
 	for i := 0; i < c.Attempts; i++ {
 		start := time.Now()
 
 		resp, err := c.Client.Do(req)
-
-		dump, err := httputil.DumpResponse(resp, true)
-		if err != nil {
-			fmt.Println(err)
-		}
-		fmt.Printf("%q", dump)
 
 		checks[i].RTT = time.Since(start)
 		if err != nil {
