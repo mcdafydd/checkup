@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/microsoft/ApplicationInsights-Go/appinsights"
@@ -58,7 +59,20 @@ func (c Exporter) Export(results []types.Result) error {
 	for _, result := range results {
 		c.Send(result)
 	}
-	return nil
+	return c.Close()
+}
+
+// Close will submit all queued telemetry to the configured Application Insights
+// service.
+// Ref: https://github.com/microsoft/ApplicationInsights-Go#shutdown
+func (c Exporter) Close() error {
+	select {
+	case <-c.TelemetryClient.Channel().Close(10 * time.Second):
+		// Ten second timeout for retries.
+		return nil
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("Failed to submit telemetry after retries")
+	}
 }
 
 // Send sends a result to the exporter
